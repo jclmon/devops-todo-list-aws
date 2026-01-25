@@ -6,6 +6,7 @@ Description: >
   Application TODO-LIST with SAM format
 
 # Parameters
+# Tenemos una serie de parametros de entrada, el parametro Stage indica el entorno donde quiero que despliegue
 Parameters:
   Stage:
     Type: String
@@ -17,6 +18,7 @@ Parameters:
     Description: Enter staging or production. Default is default  
 
 # More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+# Variables globales, a nivel de funciones lambda el timeout es 3 segundos no debe tardar mas
 Globals:
   Function:
     Timeout: 3
@@ -24,7 +26,8 @@ Globals:
       Variables:
         DYNAMODB_TABLE: !Ref TodosDynamoDbTable
         ENDPOINT_OVERRIDE: ""
-    
+
+# Funciones lambda Crear, Listar, Get, Update, Delete
 Resources:
   
   CreateTodoFunction:
@@ -92,7 +95,8 @@ Resources:
           Properties:
             Path: /todos/{id}
             Method: delete
-            
+
+#Recurso tabla Dynamo
   TodosDynamoDbTable:
     Type: AWS::DynamoDB::Table
     Properties: 
