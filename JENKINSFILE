@@ -1,0 +1,192 @@
+pipeline {
+
+    agent any
+    
+    stages {
+        stage('Get Code') {
+            steps {
+				cleanWs()
+				sh "whoami"
+                git branch: 'develop', url: 'https://github.com/jclmon/devops-todo-list-aws.git'
+                echo WORKSPACE
+        	}
+		}
+		// stage('Unit') {
+        //     steps {
+		// 		sh """
+		// 			export PATH=\$PATH:/home/ubuntu/.local/bin
+		// 			export PYTHONPATH=\$WORKSPACE
+		// 			pytest --junitxml=result-unit.xml test/unit/
+		// 		"""
+		// 		junit 'result-unit.xml'
+        //     }
+        // }
+		stage('Security') {
+		    steps {
+				// Cambio el entorno donde estan las herramientas instaladas, ejecuto Bandit con un formato que PyLint entienda
+				sh """
+					bandit -r . -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}" || true
+				"""
+				recordIssues tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')], 
+						qualityGates: [[threshold: 0, type: 'TOTAL', unstable: false]]
+		    }
+		}
+		stage('Static') {
+			steps {
+				// Cambio el entorno donde estan las herramientas instaladas, ejecuto flake8
+				sh """
+					flake8 --exit-zero --format=pylint src > result-flake8.out
+				"""
+				recordIssues enabledForFailure: true, tools: [ flake8(name: 'Flake8', pattern: 'result-flake8.out') ],
+					qualityGates: [[threshold: 0, type: 'TOTAL', criticality: 'FAILURE']]
+			}
+		}
+		stage('Verify IAM') {
+			steps {
+				sh """
+					echo "==================================================================="
+					echo "=== DIAGNÓSTICO DE IDENTIDAD Y PERMISOS AWS ==="
+					echo "==================================================================="
+					
+					echo "=== 1. Identidad actual (Jenkins) ==="
+					aws sts get-caller-identity
+					
+					echo ""
+					echo "=== 2. ARN completo ==="
+					CALLER_ARN=\$(aws sts get-caller-identity --query 'Arn' --output text)
+					echo "ARN: \${CALLER_ARN}"
+					
+					echo ""
+					echo "=== 3. Variables de entorno AWS ==="
+					env | grep AWS || echo "No hay variables AWS_* configuradas"
+					
+					echo ""
+					echo "=== 4. Archivo de credenciales ==="
+					ls -la ~/.aws/ 2>/dev/null || echo "No existe ~/.aws/"
+					
+					echo ""
+					echo "=== 5. Políticas adjuntas al rol ==="
+					ACCOUNT_ID=\$(aws sts get-caller-identity --query 'Account' --output text)
+					ROLE_NAME=\$(echo \${CALLER_ARN} | cut -d'/' -f2)
+					echo "Rol: \${ROLE_NAME}"
+					
+					aws iam list-attached-role-policies --role-name \${ROLE_NAME} 2>/dev/null || echo "No se pueden listar políticas del rol"
+					
+					echo ""
+					echo "=== 6. Comparación: ejecuta manualmente este comando y compara ==="
+					echo "Comando para ejecutar manualmente desde tu terminal:"
+					echo "   aws sts get-caller-identity"
+					echo ""
+					echo "Si el ARN es diferente entre Jenkins y tu terminal manual,"
+					echo "ese es el problema: Jenkins usa credenciales/rol diferente."
+					echo "==================================================================="
+				"""
+			}
+		}    
+		stage('Deploy') {
+            steps {
+				sh """
+					echo "=== Verificando credenciales AWS ==="
+					aws sts get-caller-identity
+					
+					sam build --template template.yaml
+				"""
+										
+				// Despliegue simplificado ahora que las credenciales están configuradas
+				sh """
+					export SAM_CLI_TELEMETRY=0
+					
+					echo "=== Desplegando con SAM ==="
+					sam deploy --config-env staging --resolve-s3 --no-fail-on-empty-changeset --no-confirm-changeset
+					
+					echo "=== Deploy completado exitosamente ==="
+				"""
+				
+				// sh """
+				// 	sam validate --template template.yaml
+				// """
+					
+				// Obtener BaseUrlApi y guardar en archivo
+				sh """
+					aws cloudformation describe-stacks \\
+						--stack-name todo-list-aws-staging \\
+						--query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' \\
+						--output text \\
+						--region us-east-1 > base_url.txt
+					echo "BaseUrlApi guardada en base_url.txt"
+					cat base_url.txt
+				"""
+				// Guardar el archivo en stash
+				stash name: 'base_url', includes: 'base_url.txt'
+            }
+        }
+		stage('Rest') {
+			steps {
+				// Recuperar base_url del stash
+				unstash 'base_url'
+				sh """
+					export PATH=\$PATH:/home/ubuntu/.local/bin
+					export BASE_URL=\$(cat base_url.txt)
+					echo "BASE_URL: \${BASE_URL}"
+					
+					echo 'Verificando pytest'
+					which pytest || pip3 install pytest
+					
+					echo 'Verificando estructura de tests'
+					ls -la test/integration/
+					
+					echo 'Ejecutando tests de integración'
+					pytest -v test/integration/todoApiTest.py --junitxml=result-rest.xml || {
+						echo "=== Tests fallaron, revisando logs de Lambda ==="
+						aws logs tail /aws/lambda/todo-list-aws-staging-CreateTodoFunction --region us-east-1 --since 5m || true
+						exit 1
+					}
+				"""
+				junit skipPublishingChecks: true, testResults: 'result-rest.xml'
+			}
+		}
+		stage('Promote') {
+			steps {
+				withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+					sh """
+						echo "=== Promoviendo versión a Release ==="
+						
+						# Configurar git con tu usuario
+						git config user.email "jclmon@outlook.es"
+						git config user.name "jclmon"
+						
+						# Verificar rama actual
+						echo "Rama actual: \$(git branch --show-current)"
+						
+						# Hacer fetch de todas las ramas
+						git fetch origin
+						
+						# Checkout a master
+						git checkout master
+						
+						# Merge de develop a master
+						echo "Mergeando develop en master..."
+						git merge origin/develop -m "Merge develop to master - Release version \$(date +%Y%m%d-%H%M%S)"
+						
+						# Push a master usando credenciales
+						echo "Pusheando a master..."
+						git push https://\${GIT_USERNAME}:\${GIT_PASSWORD}@github.com/jclmon/devops-todo-list-aws.git master
+						
+						echo "=== Versión promovida exitosamente a master ==="
+					"""
+				}
+				
+				script {
+					echo "=== Disparando pipeline de producción CD =="
+					build job: 'todo-list-aws-production', 
+						wait: false,
+						parameters: [
+							string(name: 'BRANCH', value: 'master')
+						]
+					echo "=== Pipeline CD de producción iniciado ==="
+				}
+			}
+		}
+    }
+
+}
