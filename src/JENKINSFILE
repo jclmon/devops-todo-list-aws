@@ -1,0 +1,79 @@
+pipeline {
+
+    agent any
+    
+    stages {
+        stage('Get Code') {
+            steps {
+				cleanWs()
+				sh "whoami"
+                git url: 'https://github.com/jclmon/devops-todo-list-aws.git'
+                echo WORKSPACE
+        	}
+		}		
+		stage('Deploy') {
+            steps {
+				sh """
+					echo "=== Verificando credenciales AWS ==="
+					aws sts get-caller-identity
+					
+					sam build --template template.yaml
+				"""
+										
+				// Despliegue simplificado ahora que las credenciales están configuradas
+				sh """
+					export SAM_CLI_TELEMETRY=0
+					
+					echo "=== Desplegando con SAM ==="
+					sam deploy --config-env production --resolve-s3 --no-fail-on-empty-changeset --no-confirm-changeset
+					
+					echo "=== Deploy completado exitosamente ==="
+				"""
+				
+				// sh """
+				// 	sam validate --template template.yaml
+				// """
+					
+				// Obtener BaseUrlApi y guardar en archivo
+				sh """
+					aws cloudformation describe-stacks \\
+						--stack-name todo-list-aws-production \\
+						--query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' \\
+						--output text \\
+						--region us-east-1 > base_url.txt
+					echo "BaseUrlApi guardada en base_url.txt"
+					cat base_url.txt
+				"""
+				// Guardar el archivo en stash
+				stash name: 'base_url', includes: 'base_url.txt'
+            }
+        }
+		stage('Rest') {
+			steps {
+				// Recuperar base_url del stash
+				unstash 'base_url'
+				sh """
+					export PATH=\$PATH:/home/ubuntu/.local/bin
+					export BASE_URL=\$(cat base_url.txt)
+					echo "BASE_URL: \${BASE_URL}"
+					
+					echo 'Verificando pytest'
+					which pytest || pip3 install pytest
+					
+					echo 'Verificando estructura de tests'
+					ls -la test/integration/
+					
+					echo 'Ejecutando tests de integración (solo lectura)'
+					pytest -v test/integration/todoApiTest.py -k "listtodos" --junitxml=result-rest.xml || {
+						echo "=== Tests fallaron, revisando logs de Lambda ==="
+						aws logs tail /aws/lambda/todo-list-aws-staging-CreateTodoFunction --region us-east-1 --since 5m || true
+						exit 1
+					}			
+				"""
+				junit skipPublishingChecks: true, testResults: 'result-rest.xml'
+			}
+		}
+
+    }
+
+}
