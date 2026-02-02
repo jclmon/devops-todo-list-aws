@@ -6,7 +6,6 @@ Description: >
   Application TODO-LIST with SAM format
 
 # Parameters
-# Tenemos una serie de parametros de entrada, el parametro Stage indica el entorno donde quiero que despliegue
 Parameters:
   Stage:
     Type: String
@@ -18,7 +17,6 @@ Parameters:
     Description: Enter staging or production. Default is default
 
 # More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
-# Variables globales, a nivel de funciones lambda el timeout es 3 segundos no debe tardar mas
 Globals:
   Function:
     Timeout: 3
@@ -27,17 +25,14 @@ Globals:
         DYNAMODB_TABLE: !Ref TodosDynamoDbTable
         ENDPOINT_OVERRIDE: ""
 
-# Funciones lambda Crear, Listar, Get, Update, Delete
 Resources:
   CreateTodoFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       Handler: create.create
-      Runtime: python3.12
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref TodosDynamoDbTable
+      Runtime: python3.10
       Events:
         Create:
           Type: Api
@@ -48,11 +43,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       Handler: list.list
-      Runtime: python3.12
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref TodosDynamoDbTable
+      Runtime: python3.10
       Events:
         Create:
           Type: Api
@@ -63,11 +56,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       Handler: get.get
-      Runtime: python3.12
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref TodosDynamoDbTable
+      Runtime: python3.10
       Events:
         Create:
           Type: Api
@@ -78,11 +69,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       Handler: update.update
-      Runtime: python3.12
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref TodosDynamoDbTable
+      Runtime: python3.10
       Events:
         Create:
           Type: Api
@@ -93,11 +82,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: src/
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
       Handler: delete.delete
-      Runtime: python3.12
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref TodosDynamoDbTable
+      Runtime: python3.10
       Events:
         Create:
           Type: Api
@@ -105,7 +92,6 @@ Resources:
             Path: /todos/{id}
             Method: delete
 
-  #Recurso tabla Dynamo
   TodosDynamoDbTable:
     Type: AWS::DynamoDB::Table
     Properties:
