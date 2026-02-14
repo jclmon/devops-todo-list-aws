@@ -3,6 +3,7 @@ pipeline {
     agent any
     
     stages {
+	
         stage('Get Code') {
             steps {
 				showInfo()
@@ -10,7 +11,8 @@ pipeline {
                 git branch: 'master', url: 'https://github.com/jclmon/devops-todo-list-aws.git'
 				sh '''curl -o samconfig.toml https://raw.githubusercontent.com/jclmon/devops-todo-list-aws-config/production/samconfig.toml'''
         	}
-		}		
+		}
+		
 		stage('Deploy') {
             steps {
 				showInfo()
@@ -49,6 +51,7 @@ pipeline {
 				stash name: 'base_url', includes: 'base_url.txt'
             }
         }
+
 		stage('Rest') {		
 			steps {
 				showInfo()
@@ -78,6 +81,9 @@ pipeline {
 					}			
 				"""
 				junit skipPublishingChecks: true, testResults: 'result-rest.xml'
+				
+				//limpio el workspace
+				cleanWs()
 			}
 		}
 
