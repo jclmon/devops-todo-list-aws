@@ -7,7 +7,7 @@ pipeline {
             steps {
 				showInfo()
 				cleanWs()
-                git url: 'https://github.com/jclmon/devops-todo-list-aws.git'
+                git branch: 'master', url: 'https://github.com/jclmon/devops-todo-list-aws.git'
 				sh '''curl -o samconfig.toml https://raw.githubusercontent.com/jclmon/devops-todo-list-aws-config/production/samconfig.toml'''
         	}
 		}		
