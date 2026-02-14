@@ -5,14 +5,15 @@ pipeline {
     stages {
         stage('Get Code') {
             steps {
+				showInfo()
 				cleanWs()
-				sh "whoami"
                 git url: 'https://github.com/jclmon/devops-todo-list-aws.git'
-                echo WORKSPACE
+				sh '''curl -o samconfig.toml https://raw.githubusercontent.com/jclmon/devops-todo-list-aws-config/production/samconfig.toml'''
         	}
 		}		
 		stage('Deploy') {
             steps {
+				showInfo()
 				sh """
 					echo "=== Verificando credenciales AWS ==="
 					aws sts get-caller-identity
@@ -48,10 +49,16 @@ pipeline {
 				stash name: 'base_url', includes: 'base_url.txt'
             }
         }
-		stage('Rest') {
+		stage('Rest') {		
 			steps {
+				showInfo()
 				// Recuperar base_url del stash
 				unstash 'base_url'
+				// Espera a que el servicio responda antes de continuar
+				script {
+					env.BASE_URL = sh(script: "cat base_url.txt", returnStdout: true).trim()
+					waitForServiceAvailability("${env.BASE_URL}/todos", "API TodoList")
+				}
 				sh """
 					export PATH=\$PATH:/home/ubuntu/.local/bin
 					export BASE_URL=\$(cat base_url.txt)
@@ -76,4 +83,30 @@ pipeline {
 
     }
 
+}
+
+def showInfo() {    
+	def envInfo = sh(script: '''
+        echo "Whoami: $(whoami)"
+        echo "Hostname: $(hostname)"
+        echo "WORKSPACE: ${WORKSPACE}"
+    ''', returnStdout: true).trim()
+}
+
+def waitForServiceAvailability(url, serviceName) {
+    echo "Esperando a ${serviceName} en ${url}..."
+    timeout(time: 30, unit: 'SECONDS') {
+        waitUntil {
+            try {
+                def response = sh(
+                    script: "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 '${url}'", 
+                    returnStdout: true
+                ).trim()                
+                return (response == '200')
+            } catch (Exception e) {
+                return false
+            }
+        }
+    }
+    echo "${serviceName} está disponible."
 }
