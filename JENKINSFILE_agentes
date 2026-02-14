@@ -112,7 +112,7 @@ pipeline {
 			steps {
 				showInfo()
 				
-				withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+				withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'U', passwordVariable: 'P')]) {
 					sh """
 						echo "=== Promoviendo versión a Release ==="
 						
@@ -154,7 +154,14 @@ pipeline {
 
 						# 4. Push a GitHub usando las credenciales
 						echo "Subiendo cambios a GitHub..."
-						git push https://${GIT_USERNAME}:${GIT_PASSWORD}@://github.com master
+						# 4.1. Configuramos el helper para que use las credenciales de esta sesión
+						git config credential.helper '!f() { echo username=\$U; echo password=\$P; }; f'
+						
+						# 4.2. Ahora el push es limpio y sin caracteres raros en la URL
+						git push origin master
+						
+						# 4.3. Limpiamos el helper por seguridad
+						git config --unset credential.helper
 						
 						echo "=== Versión promovida exitosamente a master ==="
 					"""
