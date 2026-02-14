@@ -1,0 +1,130 @@
+pipeline {
+
+    agent any
+    
+    stages {
+        stage('Get Code') {
+			agent { label 'python' }
+            steps {
+				showInfo()
+				cleanWs()
+                git url: 'https://github.com/jclmon/devops-todo-list-aws.git'
+				sh '''curl -o samconfig.toml https://raw.githubusercontent.com/jclmon/devops-todo-list-aws-config/production/samconfig.toml'''
+				stash name:'code', includes:'**'
+				stash name: 'samconfig', includes:'samconfig.toml'
+        	}
+		}		
+		stage('Deploy') {
+			agent { label 'built-in' }
+            steps {
+				showInfo()
+				unstash 'code'
+				unstash 'samconfig'
+
+				sh """
+					echo "=== Verificando credenciales AWS ==="
+					aws sts get-caller-identity
+					
+					sam build --template template.yaml
+				"""
+										
+				// Despliegue simplificado ahora que las credenciales están configuradas
+				sh """
+					export SAM_CLI_TELEMETRY=0
+					
+					echo "=== Desplegando con SAM ==="
+					sam deploy --config-env production --resolve-s3 --no-fail-on-empty-changeset --no-confirm-changeset
+					
+					echo "=== Deploy completado exitosamente ==="
+				"""
+				
+				// sh """
+				// 	sam validate --template template.yaml
+				// """
+					
+				// Obtener BaseUrlApi y guardar en archivo
+				sh """
+					aws cloudformation describe-stacks \\
+						--stack-name todo-list-aws-production \\
+						--query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' \\
+						--output text \\
+						--region us-east-1 > base_url.txt
+					echo "BaseUrlApi guardada en base_url.txt"
+					cat base_url.txt
+				"""
+				// Guardar el archivo en stash
+				stash name: 'base_url', includes: 'base_url.txt'
+            }
+        }
+		stage('Rest') {		
+			agent { label 'python' }
+			steps {
+				showInfo()
+				unstash 'code'
+				unstash 'base_url'
+				
+				// Espera a que el servicio responda antes de continuar
+				script {
+					env.BASE_URL = sh(script: "cat base_url.txt", returnStdout: true).trim()
+					waitForServiceAvailability("${env.BASE_URL}/todos", "API TodoList")
+				}
+				sh """
+					export PATH=\$PATH:/home/ubuntu/.local/bin
+					export BASE_URL=\$(cat base_url.txt)
+					echo "BASE_URL: \${BASE_URL}"
+					
+					echo 'Verificando pytest'
+					which pytest || pip3 install pytest
+					
+					echo 'Verificando estructura de tests'
+					ls -la test/integration/
+					
+					echo 'Ejecutando tests de integración (solo lectura)'
+					pytest -v test/integration/todoApiTest.py -k "listtodos" --junitxml=result-rest.xml || {
+						echo "=== Tests fallaron, revisando logs de Lambda ==="
+						aws logs tail /aws/lambda/todo-list-aws-staging-CreateTodoFunction --region us-east-1 --since 5m || true
+						exit 1
+					}			
+				"""
+				junit skipPublishingChecks: true, testResults: 'result-rest.xml'
+			}
+		}
+
+    }
+    post {
+        always {
+            node('built-in') {
+                cleanWs()
+            }
+            node('python') {
+                cleanWs()
+            }
+        }
+    }
+}
+
+def showInfo() {    
+	def envInfo = sh(script: '''
+        echo "Whoami: $(whoami)"
+        echo "Hostname: $(hostname)"
+        echo "WORKSPACE: ${WORKSPACE}"
+    ''', returnStdout: true).trim()
+}
+
+def waitForServiceAvailability(url, serviceName) {
+    echo "Esperando a ${serviceName} en ${url}..."
+    timeout(time: 30, unit: 'SECONDS') {
+        waitUntil {
+            try {
+                def response = sh(
+                    script: "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 '${url}'", 
+                    returnStdout: true
+                ).trim()                
+                return (response == '200')
+            } catch (Exception e) {
+                return false
+            }
+        }
+    }
+    echo "${serviceName} está disponible."
+}
