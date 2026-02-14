@@ -1,41 +1,42 @@
 pipeline {
 
-    agent any
+    agent none
+    
+    //no descarga el codigo fuente en todos los agentes
+    options{ skipDefaultCheckout() }
     
     stages {
         stage('Get Code') {
-            steps {
+			agent { label 'python' }
+			steps {
 				showInfo()
 				cleanWs()				
 				git branch: 'develop', url: 'https://github.com/jclmon/devops-todo-list-aws.git'
 				sh '''curl -o samconfig.toml https://raw.githubusercontent.com/jclmon/devops-todo-list-aws-config/staging/samconfig.toml'''
 				stash name:'code', includes:'**'
 				stash name: 'samconfig', includes:'samconfig.toml'
-        	}
+			}
 		}
 		stage('Static Test') {
+            agent { label 'python' }
             steps {
 				showInfo()
 				unstash 'code'
 				
-				// Ejecuto flake8 analisis estatico, exit-zero devolvera siempre success
-				sh 'flake8 --exit-zero --format=pylint src > result-flake8.out'
+				// Ejecuto flake8 analisis estatico
+				sh '/home/ubuntu/.local/bin/flake8 --exit-zero --format=pylint src > result-flake8.out'
+				recordIssues enabledForFailure: true, tools: [ flake8(name: 'Flake8', pattern: 'result-flake8.out') ], qualityGates: [[threshold: 0, type: 'TOTAL', criticality: 'FAILURE']]
 				
-				// Solo registramos los problemas encontrados sin poner condiciones de fallo, al no poner qualityGates, Jenkins solo lee el archivo y muestra el reporte
-				recordIssues enabledForFailure: true, tools: [ flake8(name: 'Flake8', pattern: 'result-flake8.out') ]
-				
-				// Ejecuto Bandit analisis de seguridad, el || true asegura que el comando sh no falle
-				sh 'bandit -r src -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}" || true'
-				
-				// Solo registramos los problemas encontrados sin poner condiciones de fallo
-				recordIssues tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')]
+				// Ejecuto Bandit analisis de seguridad
+				sh '/home/ubuntu/.local/bin/bandit  -r src -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}" || true'
+				recordIssues tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')], qualityGates: [[threshold: 0, type: 'TOTAL', unstable: false]]
             }
-        }		  
+        }		 
 		stage('Deploy') {
 			agent { label 'built-in' }
             steps {
 				showInfo()
-				unstash 'code'				
+				unstash 'code'
 				unstash 'samconfig'
 				
 				sh """
@@ -74,11 +75,11 @@ pipeline {
             }
         }
 		stage('Rest') {
+			agent { label 'python' }
 			steps {
 				showInfo()
 				unstash 'code'
-				// Recuperar base_url del stash
-				unstash 'base_url'
+				unstash 'base_url'		
 				
 				// Espera a que el servicio responda antes de continuar
 				script {
@@ -89,7 +90,7 @@ pipeline {
 					export PATH=\$PATH:/home/ubuntu/.local/bin
 					export BASE_URL=\$(cat base_url.txt)
 					echo "BASE_URL: \${BASE_URL}"
-					
+												
 					echo 'Verificando pytest'
 					which pytest || pip3 install pytest
 					
@@ -107,6 +108,7 @@ pipeline {
 			}
 		}
 		stage('Promote') {
+			agent { label 'python' }
 			steps {
 				showInfo()
 				
@@ -142,7 +144,6 @@ pipeline {
 							echo "ERROR: Hay otros conflictos además de JENKINSFILE"
 							git merge --abort
 							exit 1
-						fixit 1
 						fi
 						# Completar el merge
 						git commit -m "Merge develop to master - Release version \$(date +%Y%m%d-%H%M%S)"
@@ -152,17 +153,25 @@ pipeline {
 				}				
 				script {
 					echo "=== Disparando pipeline de producción CD ==="
-					build job: 'todo-list-aws-production', 
+					build job: 'todo-list-aws-production-agentes', 
 						wait: false,
 						parameters: [
 							string(name: 'BRANCH', value: 'master')
 						]
 					echo "=== Pipeline CD de producción iniciado ==="
 				}
-				//limpio el workspace
-				cleanWs()
 			}
 		}
+    }
+    post {
+        always {
+            node('built-in') {
+                cleanWs()
+            }
+            node('python') {
+                cleanWs()
+            }
+        }
     }
 }
 
