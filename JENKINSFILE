@@ -109,53 +109,68 @@ pipeline {
 			steps {
 				showInfo()
 				
-				withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+				withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'U', passwordVariable: 'P')]) {
 					sh """
 						echo "=== Promoviendo versión a Release ==="
 						
-						# Configurar git con tu usuario
+						# 1. Configurar identidad de git
 						git config user.email "jclmon@outlook.es"
 						git config user.name "jclmon"
 						
-						# Verificar rama actual
-						echo "Rama actual: \$(git branch --show-current)"
-						
-						# Hacer fetch de todas las ramas
+						# Asegurarse de tener acceso a las ramas y limpiar el estado local
 						git fetch origin
-						
-						# Checkout a master
 						git checkout master
+						git pull origin master
 						
-						# Merge de develop a master
 						echo "Mergeando develop en master..."
-					git merge origin/develop -m "Merge develop to master - Release version \$(date +%Y%m%d-%H%M%S)" || {
-						echo "Conflicto detectado, resolviendo..."
-						# Si hay conflicto en JENKINSFILE, usar versión de master
-						git checkout --ours JENKINSFILE
-						git add JENKINSFILE
-						# Si hay conflicto en JENKINSFILE_agentes, usar versión de master
-						git checkout --ours JENKINSFILE_agentes
-						git add JENKINSFILE_agentes
-						# Verificar si hay otros conflictos
-						if git diff --name-only --diff-filter=U | grep -v JENKINSFILE; then
-							echo "ERROR: Hay otros conflictos además de JENKINSFILE"
-							git merge --abort
-							exit 1
-						fixit 1
+						
+						# 2. Intentar merge. Incluimos [skip ci] en el mensaje inicial por si no hay conflictos
+						if git merge origin/develop -m "Merge develop to master - Release version \$(date +%Y%m%d-%H%M%S) [skip ci]"; then
+							echo "Merge directo exitoso."
+						else
+							echo "Conflicto detectado, resolviendo..."
+							
+							# Resolver conflictos en archivos de Jenkins (usar versión de master)
+							git checkout --ours JENKINSFILE 2>/dev/null || true
+							git add JENKINSFILE 2>/dev/null || true
+							
+							git checkout --ours JENKINSFILE_agentes 2>/dev/null || true
+							git add JENKINSFILE_agentes 2>/dev/null || true
+							
+							# Verificar si hay otros conflictos reales
+							# Filtramos JENKINSFILE y JENKINSFILE_agentes
+							if git diff --name-only --diff-filter=U | grep -vE "JENKINSFILE|JENKINSFILE_agentes"; then
+								echo "ERROR: Hay otros conflictos además de los Jenkinsfiles"
+								git merge --abort
+								exit 1
+							fi
+							
+							# 3. Commit con resolucion de conflictos
+							git commit -m "Merge develop to master - Resolve conflicts [skip ci]"
 						fi
-						# Completar el merge
-						git commit -m "Merge develop to master - Release version \$(date +%Y%m%d-%H%M%S)"
-					}
+
+						# 4. Push a GitHub usando las credenciales
+						echo "Subiendo cambios a GitHub..."
+						# 4.1. Configuramos el helper para que use las credenciales de esta sesión
+						git config credential.helper '!f() { echo username=\$U; echo password=\$P; }; f'
+						
+						# 4.2. Ahora el push es limpio y sin caracteres raros en la URL
+						git push origin master
+						
+						# 4.3. Limpiamos el helper por seguridad
+						git config --unset credential.helper
+						
 						echo "=== Versión promovida exitosamente a master ==="
 					"""
-				}				
+				}
 				script {
 					echo "=== Disparando pipeline de producción CD ==="
-					build job: 'todo-list-aws-production', 
-						wait: false,
-						parameters: [
-							string(name: 'BRANCH', value: 'master')
-						]
+					// Asegúrate de que el nombre del job sea exacto
+					build job: 'todo-list-aws-production-agentes', 
+						  wait: false,
+						  parameters: [
+							  string(name: 'BRANCH', value: 'master')
+						  ]
 					echo "=== Pipeline CD de producción iniciado ==="
 				}
 				//limpio el workspace
