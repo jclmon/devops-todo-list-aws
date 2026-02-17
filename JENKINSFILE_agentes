@@ -167,17 +167,6 @@ pipeline {
 					"""
 				}
 
-				script {
-					echo "=== Disparando pipeline de producción CD ==="
-					// Asegúrate de que el nombre del job sea exacto
-					build job: 'todo-list-aws-production-agentes', 
-						  wait: false,
-						  parameters: [
-							  string(name: 'BRANCH', value: 'master')
-						  ]
-					echo "=== Pipeline CD de producción iniciado ==="
-				}
-
 			}
 		}
     }
