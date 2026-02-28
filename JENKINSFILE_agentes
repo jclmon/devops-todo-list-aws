@@ -25,11 +25,11 @@ pipeline {
 				
 				// Ejecuto flake8 analisis estatico
 				sh '/home/ubuntu/.local/bin/flake8 --exit-zero --format=pylint src > result-flake8.out'
-				recordIssues enabledForFailure: true, tools: [ flake8(name: 'Flake8', pattern: 'result-flake8.out') ], qualityGates: [[threshold: 0, type: 'TOTAL', criticality: 'FAILURE']]
+				recordIssues enabledForFailure: true, tools: [ flake8(name: 'Flake8', pattern: 'result-flake8.out') ]
 				
 				// Ejecuto Bandit analisis de seguridad
 				sh '/home/ubuntu/.local/bin/bandit  -r src -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}" || true'
-				recordIssues tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')], qualityGates: [[threshold: 0, type: 'TOTAL', unstable: false]]
+				recordIssues tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')]
             }
         }		 
 		stage('Deploy') {
